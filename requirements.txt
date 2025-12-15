@@ -1,0 +1,4 @@
+pillow
+pygame
+pystray
+easing-functions

@@ -108,6 +108,24 @@ def char_res_path(relative_path: str, path: str | None = None) -> str:
     return resource_path(char_path(relative_path, path))
 
 
+# 将被视为透明的颜色
+transparentcolor = 'white'
+
+
+def threshold(img: Image.Image, thr: float = 0xFF, /) -> Image.Image:
+    """
+    将图像的透明度二值化（完全透明 或 完全不透明）
+    :param img: 图像
+    :param thr: 阈值（不透明度小于阈值 -> 完全透明）
+    :return: 图像
+    """
+    img = img.copy()
+    alp = img.getchannel("A") # 提取透明度通道
+    alp = alp.point(lambda a: 0x00 if a < thr else 0xFF) # 二值化
+    img.putalpha(alp) # 覆盖透明度通道
+    return img
+
+
 class FloatingImage:
     def __init__(self, root: tk.Tk, image_path: str | None = None):
         self.animation_start_time: int | None = None
@@ -122,7 +140,7 @@ class FloatingImage:
         self.root: tk.Tk = root
         self.root.overrideredirect(True)  # 无边框
         self.root.attributes('-topmost', True)  # 最上层显示
-        self.root.attributes('-transparentcolor', 'white')  # 透明色（根据图片调整）
+        self.root.attributes('-transparentcolor', transparentcolor)  # 透明色（根据图片调整）
 
         # 初始化音效
         pygame.mixer.init()
@@ -163,8 +181,14 @@ class FloatingImage:
         """加载图片并保持原始像素"""
         try:
             self.original_image = Image.open(self.image_path).convert("RGBA")
+            
+            # 二值化透明度，去除白边
+            self.original_image = threshold(self.original_image)
+            
+            # 略微扩展画布大小，以避免图像在动画过程中溢出画布范围
             self.width = int(self.original_image.size[0] * 1.2)
             self.height = int(self.original_image.size[1] * 1.1)
+            
             # 禁用高DPI缩放，保持原始像素
             self.root.tk.call('tk', 'scaling', 1.0)
 
@@ -172,7 +196,7 @@ class FloatingImage:
             if self.canvas:
                 self.canvas.destroy()
             self.canvas = tk.Canvas(self.root, width=self.width, height=self.height,
-                                    highlightthickness=0, bg='white')
+                                    highlightthickness=0, bg=transparentcolor)
             self.canvas.pack()
 
             # 转换为tkinter可用格式
@@ -187,7 +211,7 @@ class FloatingImage:
             print(f"加载图片失败: {e}")
             self.width, self.height = 200, 200
             self.canvas = tk.Canvas(self.root, width=self.width, height=self.height,
-                                    highlightthickness=0, bg='white')
+                                    highlightthickness=0, bg=transparentcolor)
             self.canvas.pack()
             self.canvas.create_text(100, 100, text="图片加载失败", fill="black")
 
@@ -239,6 +263,7 @@ class FloatingImage:
         new_width: int = int(self.original_image.size[0] * self.x_scale_factor)
         new_height: int = int(self.original_image.size[1] * self.y_scale_factor)
         resized_image: Image.Image = self.original_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        resized_image = threshold(resized_image)
         self.tk_image = ImageTk.PhotoImage(resized_image)
         self.canvas.itemconfig(self.canvas_image, image=self.tk_image)
 
@@ -255,7 +280,7 @@ class FloatingImage:
             self.canvas.itemconfig(self.canvas_image, image=self.tk_image)
             self.canvas.coords(self.canvas_image, (self.width - self.original_image.size[0]) // 2, self.height - self.original_image.size[1])
         else:
-            self.root.after(20, self.animate)
+            self.root.after(1000 // 30, self.animate)
 
     def create_right_menu(self):
         """创建右键菜单"""
@@ -378,7 +403,7 @@ def main():
     # 设置透明背景（支持透明像素）
     root.attributes('-alpha', 1.0)
     if os.name == 'nt':  # Windows系统
-        root.attributes('-transparentcolor', 'white')
+        root.attributes('-transparentcolor', transparentcolor)
 
     # 创建悬浮图片实例
     app: FloatingImage = FloatingImage(root)

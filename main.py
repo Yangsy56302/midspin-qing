@@ -2,7 +2,7 @@ import shutil
 import time
 import tkinter as tk
 from tkinter import filedialog, Menu
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 from PIL import Image, ImageTk, ImageDraw
 import pygame
 import threading
@@ -21,14 +21,14 @@ def custom_easing_curve(t: float) -> tuple[float, float]:
     :param t: 归一化时间（0 ≤ t ≤ 1）
     :return: 对应数值
     """
-    if 0 <= t < 1/12:
-        ease_func = easing.CubicEaseOut(start=0, end=-1/2, duration=1/12 - 0) # type: ignore
+    if 0 <= t < 0.125:
+        ease_func = easing.CubicEaseOut(start=0, end=-0.5, duration=0.125) # type: ignore
         ease_val: float = ease_func.ease(t)
-        return 1 - ease_val/2, 1 + ease_val
-    elif 1/12 <= t < 1:
-        ease_func = easing.ElasticEaseOut(start=-1/2, end=0, duration=1 - 1/12) # type: ignore
-        ease_val: float = ease_func.ease(t - 1/12)
-        return 1 - ease_val/2, 1 + ease_val
+        return 1 - ease_val, 1 + ease_val
+    elif 0.125 <= t < 1:
+        ease_func = easing.ElasticEaseOut(start=-0.5, end=0, duration=1.25) # type: ignore
+        ease_val: float = ease_func.ease(t - 0.125)
+        return 1 - ease_val, 1 + ease_val
     else: # 边界处理
         return 1.0, 1.0
 
@@ -53,7 +53,7 @@ class Config(TypedDict):
 
 config: Config
 default_config: Config = Config({
-    "char": "miss_qing",
+    "char": "./miss_qing",
     "fps": 60,
     "topmost": True,
     "echo": False,
@@ -64,13 +64,18 @@ path_char_config: str = "config.yml"
 class CharConfig(TypedDict):
     sound: str # 中旋音效文件相对路径
     image: str # 晴立绘文件相对路径
+    # image_link: NotRequired[str] # 未戳过
+    # image_hover: NotRequired[str] # 悬停时
+    image_active: NotRequired[str] # 戳动画
+    # image_visited: NotRequired[str] # 戳完后
+    icon: NotRequired[str] # 托盘图标文件相对路径
     miyu_color: str # 将被视为透明的颜色
 
 char_config: CharConfig
 default_char_config: CharConfig = CharConfig({
     "sound": "sndReverbClack.wav",
     "image": "Miss Qing.png",
-    "miyu_color": "#FFFFFF",
+    "miyu_color": "#AD0FA1",
 })
 
 
@@ -86,15 +91,15 @@ def load_char_config():
         char_config = default_char_config.copy()
         char_config.update(yaml.load(f, Loader=yaml.FullLoader))
 
-def dump_config():
-    global config
+def dump_config(cfg: Config | None = None, /):
+    if cfg is None: cfg = config
     with open(resource_path(path_config), "w") as f:
-        yaml.dump(config, f)
+        yaml.dump(cfg, f)
 
-def dump_char_config():
-    global char_config
+def dump_char_config(cfg: CharConfig | None = None, /):
+    if cfg is None: cfg = char_config
     with open(char_res_path(path_char_config), "w") as f:
-        yaml.dump(char_config, f)
+        yaml.dump(cfg, f)
 
 
 # 计算角色素材路径
@@ -120,7 +125,7 @@ def threshold(img: Image.Image, thr: float = 0xFF, /) -> Image.Image:
 
 
 class FloatingImage:
-    def __init__(self, root: tk.Tk, image_path: str | None = None):
+    def __init__(self, root: tk.Tk):
         self.root: tk.Tk = root
         self.root.overrideredirect(True)  # 无边框
         self.root.attributes('-topmost', config["topmost"])  # 最上层显示
@@ -131,18 +136,12 @@ class FloatingImage:
         self.sound: pygame.mixer.Sound = pygame.mixer.Sound(char_res_path(char_config["sound"]))
 
         # 初始化图片
-        self.load_image(image_path if image_path else char_res_path(char_config["image"]))
+        self.load_image()
 
         # 拖动相关
         self.dragging: bool = False
         self.start_x: int = 0
         self.start_y: int = 0
-
-        # 动画相关
-        self.animating: bool = False # 动画是否正在播放
-        self.current_frame: int = 0 # 动画当前位于第几帧
-        self.duration: float = 1.5 # 动画总时长（秒）
-        self.gen_frames()
 
         # 绑定事件
         self.canvas.bind("<Button-1>", self.on_click)
@@ -158,35 +157,53 @@ class FloatingImage:
         # 欢迎
         self.start_animation()
         
-    def load_image(self, image_path: str):
+    def load_image(self):
         """加载图片并保持原始像素"""
-        self.original_image: Image.Image
-        try:
-            self.original_image = Image.open(image_path).convert("RGBA")
-        except Exception:
-            self.original_image = Image.new("RGBA", (0x100, 0x100), "#F800F8")
-            draw = ImageDraw.Draw(self.original_image)
-            draw.rectangle(((0x0, 0x0), (0x80, 0x80)), fill="#000000")
-            draw.rectangle(((0x80, 0x80), (0x100, 0x100)), fill="#000000")
-            draw.text((0x20, 0x10), ":(", fill="#F800F8", font_size=0x40)
+        missing_image: Image.Image = Image.new("RGBA", (0x100, 0x100), "#F800F8")
+        draw = ImageDraw.Draw(missing_image)
+        draw.rectangle(((0x0, 0x0), (0x80, 0x80)), fill="#000000")
+        draw.rectangle(((0x80, 0x80), (0x100, 0x100)), fill="#000000")
+        draw.text((0x20, 0x10), ":(", fill="#F800F8", font_size=0x40)
         
-        # 二值化透明度，去除白边
-        self.original_image = threshold(self.original_image)
+        self.image: Image.Image
+        try:
+            self.image = threshold(Image.open(char_res_path(char_config["image"])).convert("RGBA"))
+        except Exception:
+            self.image = missing_image.copy()
+        
+        self.image_active: Image.Image
+        image_active_path = char_config.get("image_active", None)
+        if image_active_path is not None:
+            try:
+                self.image_active = threshold(Image.open(char_res_path(image_active_path)).convert("RGBA"))
+            except Exception as e:
+                print(e)
+                self.image_active = missing_image.copy()
+        else:
+            self.image_active = self.image.copy()
+
+        # 动画相关
+        self.animating: bool = False # 动画是否正在播放
+        self.current_frame: int = 0 # 动画当前位于第几帧
+        self.duration: float = 1.0 # 动画总时长（秒）
+        self.gen_frames()
         
         # 略微扩展画布大小，以避免图像在动画过程中溢出画布范围
-        self.width: int = int(self.original_image.size[0] * 1.5)
-        self.height: int = int(self.original_image.size[1] * 1.5)
+        self.width: int = int(self.image.size[0] * 1.5)
+        self.height: int = int(self.image.size[1] * 1.5)
         
         # 禁用高DPI缩放，保持原始像素
         self.root.tk.call('tk', 'scaling', 1.0)
 
         # 重新创建画布
-        self.canvas: tk.Canvas = tk.Canvas(self.root, width=self.width, height=self.height,
-                                highlightthickness=0, bg=char_config["miyu_color"])
+        self.canvas: tk.Canvas = tk.Canvas(
+            self.root, width=self.width, height=self.height,
+            highlightthickness=0, bg=char_config["miyu_color"]
+        )
         self.canvas.pack()
 
         # 转换为tkinter可用格式
-        self.tk_image: ImageTk.PhotoImage = ImageTk.PhotoImage(self.original_image)
+        self.tk_image: ImageTk.PhotoImage = ImageTk.PhotoImage(self.image)
 
         # 底部对齐
         x: int = (self.width - self.tk_image.width()) // 2
@@ -242,9 +259,9 @@ class FloatingImage:
         self.animation: list[Image.Image] = [] # 动画帧列表
         for frame in range(int(self.duration * config["fps"])):
             x_factor, y_factor = custom_easing_curve(frame / (self.duration * config["fps"]))
-            img: Image.Image = self.original_image.resize((
-                int(self.original_image.size[0] * x_factor),
-                int(self.original_image.size[1] * y_factor)
+            img: Image.Image = self.image_active.resize((
+                int(self.image_active.size[0] * x_factor),
+                int(self.image_active.size[1] * y_factor)
             ), Image.Resampling.BILINEAR)
             self.animation.append(threshold(img))
 
@@ -257,9 +274,9 @@ class FloatingImage:
         self.current_frame = int((time.time() - self.animation_start_time) * config["fps"])
         if self.current_frame >= self.duration * config["fps"]:
             self.animating = False
-            self.tk_image = ImageTk.PhotoImage(self.original_image)
+            self.tk_image = ImageTk.PhotoImage(self.image)
             self.canvas.itemconfig(self.canvas_image, image=self.tk_image)
-            self.canvas.coords(self.canvas_image, (self.width - self.original_image.size[0]) // 2, self.height - self.original_image.size[1])
+            self.canvas.coords(self.canvas_image, (self.width - self.image.size[0]) // 2, self.height - self.image.size[1])
             return
         
         # 设置当前所显示的帧
@@ -344,8 +361,8 @@ class FloatingImage:
         self.right_menu.add_command(label="更换中旋…", command=self.change_sound)
         self.right_menu.add_command(label="更换晴…", command=self.change_image)
         self.right_menu.add_separator()
-        self.right_menu.add_command(label="导入角色…", command=self.load_char)
-        self.right_menu.add_command(label="导出角色…", command=self.dump_char)
+        self.right_menu.add_command(label="读取角色配置…", command=self.load_char)
+        self.right_menu.add_command(label="克隆角色配置…", command=self.dump_char)
         self.right_menu.add_separator()
         self.right_menu.add_command(label="切换置顶", command=self.switch_topmost)
         self.right_menu.add_separator()
@@ -361,20 +378,21 @@ class FloatingImage:
 
     def create_tray(self):
         """创建系统托盘"""
-        # 创建托盘图标（使用默认图片）
+        # 创建托盘图标
         tray_icon: Image.Image
         try:
-            tray_icon = Image.open(resource_path("tray_icon.png")) if os.path.exists(resource_path("tray_icon.png")) else self.original_image
+            tray_icon_path = char_config.get("icon", char_config["image"])
+            tray_icon = Image.open(char_res_path(tray_icon_path))
         except:
-            tray_icon = Image.new('RGB', (64, 64), color='gray')
+            tray_icon = self.image.copy()
 
         # 托盘菜单
         tray_menu: tuple[MenuItem, ...] = (
             MenuItem('召唤', self.summon, default=True),
             MenuItem('更换中旋…', self.change_sound),
             MenuItem('更换晴…', self.change_image),
-            MenuItem('导入…', self.load_char),
-            MenuItem('导出…', self.dump_char),
+            MenuItem('读取角色配置…', self.load_char),
+            MenuItem('克隆角色配置…', self.dump_char),
             MenuItem('切换置顶', self.switch_topmost),
             MenuItem('重新加载', self.restart_app),
             MenuItem('退出', self.quit_app)
@@ -409,6 +427,7 @@ class FloatingImage:
 
 def main():
     # 加载配置
+    if not os.path.exists(resource_path(path_config)): dump_config(default_config)
     load_config()
     dump_config()
     load_char_config()

@@ -10,48 +10,26 @@ import pystray
 from pystray import MenuItem
 import sys
 import os
-from easing_functions import CubicEaseIn, SineEaseInOut, QuadEaseOut
+import easing_functions as easing
 import yaml
 from dataclasses import dataclass
 
 
 def custom_easing_curve(t: float) -> tuple[float, float]:
     """
-    自定义缓动曲线：1 → 0.5 → 1.1 → 1
+    自定义缓动曲线
     :param t: 归一化时间（0 ≤ t ≤ 1）
     :return: 对应数值
     """
-    # 阶段1：t=0→0.3，1 → 0.5（使用缓出曲线，如QuadEaseOut）
-    if 0 <= t <= 0.3:
-        # 归一化当前阶段时间（0→0.3 → 0→1）
-        t_norm: float = t / 0.3
-        # 缓动函数：输出0→1，映射到数值区间1→0.5
-        ease_func: QuadEaseOut = QuadEaseOut(start=0, end=1, duration=1)
-        ease_val: float = ease_func.ease(t_norm)
-        return 1 + ease_val * 0.2, 1 - ease_val * 0.5  # 1 - (0→1)*0.5 = 1→0.5
-
-    # 阶段2：t=0.3→0.7，0.5 → 1.1（使用缓入曲线，如CubicEaseIn）
-    elif 0.3 < t <= 0.7:
-        # 归一化当前阶段时间（0.3→0.7 → 0→1）
-        t_norm: float = (t - 0.3) / 0.4
-        # 缓动函数：输出0→1，映射到数值区间0.5→1.1
-        ease_func: CubicEaseIn = CubicEaseIn(start=0, end=1, duration=1)
-        ease_val: float = ease_func.ease(t_norm)
-        return 1.2 - ease_val * 0.3, 0.5 + ease_val * 0.6  # 0.5 + (0→1)*0.6 = 0.5→1.1
-
-    # 阶段3：t=0.7→1.0，1.1 → 1（使用缓入缓出曲线，如SineEaseInOut）
-    elif 0.7 < t <= 1.0:
-        # 归一化当前阶段时间（0.7→1.0 → 0→1）
-        t_norm: float = (t - 0.7) / 0.3
-        # 缓动函数：输出0→1，映射到数值区间1.1→1
-        ease_func: SineEaseInOut = SineEaseInOut(start=0, end=1, duration=1)
-        ease_val: float = ease_func.ease(t_norm)
-        return 0.9 + ease_val * 0.1, 1.1 - ease_val * 0.1  # 1.1 - (0→1)*0.1 = 1.1→1
-
-    # 边界处理（t<0或t>1）
-    elif t < 0:
-        return 1.0, 1.0
-    else:
+    if 0 <= t < 1/12:
+        ease_func: easing.EasingBase = easing.CubicEaseOut(start=0, end=-1/2, duration=1/12 - 0)
+        ease_val: float = ease_func.ease(t)
+        return 1 - ease_val/2, 1 + ease_val
+    elif 1/12 <= t < 1:
+        ease_func: easing.EasingBase = easing.ElasticEaseOut(start=-1/2, end=0, duration=1 - 1/12)
+        ease_val: float = ease_func.ease(t - 1/12)
+        return 1 - ease_val/2, 1 + ease_val
+    else: # 边界处理
         return 1.0, 1.0
 
 
@@ -167,7 +145,7 @@ class FloatingImage:
         # 动画相关
         self.animating: bool = False
         self.animation_step: float = 0
-        self.max_steps: float = 0.5  # 动画总时间（秒）
+        self.max_steps: float = 1.5  # 动画总时间（秒）
         self.x_scale_factor: float = 1.0
         self.y_scale_factor: float = 1.0
 
@@ -195,8 +173,8 @@ class FloatingImage:
             self.original_image = threshold(self.original_image)
             
             # 略微扩展画布大小，以避免图像在动画过程中溢出画布范围
-            self.width = int(self.original_image.size[0] * 1.2)
-            self.height = int(self.original_image.size[1] * 1.1)
+            self.width = int(self.original_image.size[0] * 1.5)
+            self.height = int(self.original_image.size[1] * 1.5)
             
             # 禁用高DPI缩放，保持原始像素
             self.root.tk.call('tk', 'scaling', 1.0)
@@ -289,7 +267,7 @@ class FloatingImage:
             self.canvas.itemconfig(self.canvas_image, image=self.tk_image)
             self.canvas.coords(self.canvas_image, (self.width - self.original_image.size[0]) // 2, self.height - self.original_image.size[1])
         else:
-            self.root.after(1000 // 30, self.animate)
+            self.root.after(1000 // 60, self.animate)
 
     def create_right_menu(self):
         """创建右键菜单"""

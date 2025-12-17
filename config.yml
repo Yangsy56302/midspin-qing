@@ -1,4 +1,4 @@
 char: ./miss_qing
 echo: false
 fps: 60
-topmost: false
+topmost: true

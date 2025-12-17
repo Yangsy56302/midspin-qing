@@ -67,49 +67,58 @@ def resource_path(relative_path: str) -> str:
 
 
 path_config: str = "config.yml"
-
 class Config(TypedDict):
     char: str # 自定义角色文件夹
 
 config: Config
+default_config: Config = Config({
+    "char": "miss_qing",
+})
 
 
 path_char_config: str = "config.yml"
-
-# 均为相对路径
 class CharConfig(TypedDict):
-    sound: str # 中旋
-    image: str # 晴
+    sound: str # 中旋音效文件相对路径
+    image: str # 晴立绘文件相对路径
+    miyu_color: str # 将被视为透明的颜色
 
 char_config: CharConfig
+default_char_config: CharConfig = CharConfig({
+    "sound": "sndReverbClack.wav",
+    "image": "Miss Qing.png",
+    "miyu_color": "#FFFFFF",
+})
 
 
 def load_config():
-    global config, char_config
+    global config
     with open(resource_path(path_config), "r") as f:
-        config = yaml.load(f, Loader=yaml.FullLoader)
-    with open(char_res_path(path_char_config), "r") as fc:
-        char_config = yaml.load(fc, Loader=yaml.FullLoader)
+        config = default_config.copy()
+        config.update(yaml.load(f, Loader=yaml.FullLoader))
+
+def load_char_config():
+    global char_config
+    with open(char_res_path(path_char_config), "r") as f:
+        char_config = default_char_config.copy()
+        char_config.update(yaml.load(f, Loader=yaml.FullLoader))
 
 def dump_config():
-    global config, char_config
+    global config
     with open(resource_path(path_config), "w") as f:
         yaml.dump(config, f)
-    with open(char_res_path(path_char_config), "w") as fc:
-        yaml.dump(char_config, fc)
+
+def dump_char_config():
+    global char_config
+    with open(char_res_path(path_char_config), "w") as f:
+        yaml.dump(char_config, f)
 
 
-# 获取角色素材
+# 计算角色素材路径
 def char_path(relative_path: str, path: str | None = None) -> str:
     return os.path.join(config["char"] if path is None else path, relative_path)
 
-
 def char_res_path(relative_path: str, path: str | None = None) -> str:
     return resource_path(char_path(relative_path, path))
-
-
-# 将被视为透明的颜色
-transparentcolor = 'white'
 
 
 def threshold(img: Image.Image, thr: float = 0xFF, /) -> Image.Image:
@@ -140,7 +149,7 @@ class FloatingImage:
         self.root: tk.Tk = root
         self.root.overrideredirect(True)  # 无边框
         self.root.attributes('-topmost', True)  # 最上层显示
-        self.root.attributes('-transparentcolor', transparentcolor)  # 透明色（根据图片调整）
+        self.root.attributes('-transparentcolor', char_config["miyu_color"])  # 透明色（根据图片调整）
 
         # 初始化音效
         pygame.mixer.init()
@@ -196,7 +205,7 @@ class FloatingImage:
             if self.canvas:
                 self.canvas.destroy()
             self.canvas = tk.Canvas(self.root, width=self.width, height=self.height,
-                                    highlightthickness=0, bg=transparentcolor)
+                                    highlightthickness=0, bg=char_config["miyu_color"])
             self.canvas.pack()
 
             # 转换为tkinter可用格式
@@ -211,7 +220,7 @@ class FloatingImage:
             print(f"加载图片失败: {e}")
             self.width, self.height = 200, 200
             self.canvas = tk.Canvas(self.root, width=self.width, height=self.height,
-                                    highlightthickness=0, bg=transparentcolor)
+                                    highlightthickness=0, bg=char_config["miyu_color"])
             self.canvas.pack()
             self.canvas.create_text(100, 100, text="图片加载失败", fill="black")
 
@@ -262,7 +271,7 @@ class FloatingImage:
         # 调整图片大小
         new_width: int = int(self.original_image.size[0] * self.x_scale_factor)
         new_height: int = int(self.original_image.size[1] * self.y_scale_factor)
-        resized_image: Image.Image = self.original_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        resized_image: Image.Image = self.original_image.resize((new_width, new_height), Image.Resampling.BILINEAR)
         resized_image = threshold(resized_image)
         self.tk_image = ImageTk.PhotoImage(resized_image)
         self.canvas.itemconfig(self.canvas_image, image=self.tk_image)
@@ -312,7 +321,7 @@ class FloatingImage:
             except shutil.SameFileError:
                 pass
             char_config["image"] = os.path.basename(file_path)
-            dump_config()
+            dump_char_config()
             self.restart_app()
 
     def change_sound(self):
@@ -328,7 +337,7 @@ class FloatingImage:
             except shutil.SameFileError:
                 pass
             char_config["sound"] = os.path.basename(file_path)
-            dump_config()
+            dump_char_config()
             self.restart_app()
 
     def load_char(self):
@@ -339,6 +348,7 @@ class FloatingImage:
         )
         if file_path:
             config["char"] = resource_path(file_path)
+            dump_config()
             self.restart_app()
 
     def dump_char(self):
@@ -395,6 +405,7 @@ class FloatingImage:
 def main():
     # 加载配置
     load_config()
+    load_char_config()
     
     # 创建主窗口
     root: tk.Tk = tk.Tk()
@@ -403,7 +414,7 @@ def main():
     # 设置透明背景（支持透明像素）
     root.attributes('-alpha', 1.0)
     if os.name == 'nt':  # Windows系统
-        root.attributes('-transparentcolor', transparentcolor)
+        root.attributes('-transparentcolor', char_config["miyu_color"])
 
     # 创建悬浮图片实例
     app: FloatingImage = FloatingImage(root)

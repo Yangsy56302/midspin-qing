@@ -22,11 +22,11 @@ def custom_easing_curve(t: float) -> tuple[float, float]:
     :return: 对应数值
     """
     if 0 <= t < 1/12:
-        ease_func: easing.EasingBase = easing.CubicEaseOut(start=0, end=-1/2, duration=1/12 - 0)
+        ease_func = easing.CubicEaseOut(start=0, end=-1/2, duration=1/12 - 0) # type: ignore
         ease_val: float = ease_func.ease(t)
         return 1 - ease_val/2, 1 + ease_val
     elif 1/12 <= t < 1:
-        ease_func: easing.EasingBase = easing.ElasticEaseOut(start=-1/2, end=0, duration=1 - 1/12)
+        ease_func = easing.ElasticEaseOut(start=-1/2, end=0, duration=1 - 1/12) # type: ignore
         ease_val: float = ease_func.ease(t - 1/12)
         return 1 - ease_val/2, 1 + ease_val
     else: # 边界处理
@@ -38,7 +38,7 @@ def resource_path(relative_path: str) -> str:
     """获取资源的绝对路径（用于pyinstaller打包）"""
     base_path: str
     try:
-        base_path = sys._MEIPASS
+        base_path = sys._MEIPASS # ?
     except AttributeError:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
@@ -108,22 +108,15 @@ def threshold(img: Image.Image, thr: float = 0xFF, /) -> Image.Image:
     """
     img = img.copy()
     alp = img.getchannel("A") # 提取透明度通道
-    alp = alp.point(lambda a: 0x00 if a < thr else 0xFF) # 二值化
+    alp = alp.point(lambda a: 0x00 if a < thr else 0xFF) # type: ignore 二值化
     img.putalpha(alp) # 覆盖透明度通道
     return img
+
+fps: int = 60
 
 
 class FloatingImage:
     def __init__(self, root: tk.Tk, image_path: str | None = None):
-        self.animation_start_time: int | None = None
-        self.tray: pystray.Icon = None
-        self.right_menu: tk.Menu | None = None
-        self.canvas: tk.Canvas | None = None
-        self.width: int | None = None
-        self.height: int | None = None
-        self.canvas_image: int | None = None
-        self.tk_image: ImageTk.PhotoImage | None = None
-        self.original_image: Image.Image | None = None
         self.root: tk.Tk = root
         self.root.overrideredirect(True)  # 无边框
         self.root.attributes('-topmost', True)  # 最上层显示
@@ -143,11 +136,11 @@ class FloatingImage:
         self.start_y: int = 0
 
         # 动画相关
-        self.animating: bool = False
-        self.animation_step: float = 0
-        self.max_steps: float = 1.5  # 动画总时间（秒）
-        self.x_scale_factor: float = 1.0
-        self.y_scale_factor: float = 1.0
+        self.animation: list[Image.Image] = [] # 动画帧列表
+        self.animating: bool = False # 动画是否正在播放
+        self.current_frame: int = 0 # 动画当前位于第几帧
+        self.duration: float = 1.5 # 动画总时长（秒）
+        self.gen_frames()
 
         # 绑定事件
         self.canvas.bind("<Button-1>", self.on_click)
@@ -166,6 +159,13 @@ class FloatingImage:
 
     def load_image(self):
         """加载图片并保持原始像素"""
+        self.tray: pystray.Icon # type: ignore
+        self.canvas: tk.Canvas
+        self.width: int
+        self.height: int
+        self.canvas_image: int # 这个大概是ID一类的吧
+        self.tk_image: ImageTk.PhotoImage
+        self.original_image: Image.Image # 原图
         try:
             self.original_image = Image.open(self.image_path).convert("RGBA")
             
@@ -180,8 +180,6 @@ class FloatingImage:
             self.root.tk.call('tk', 'scaling', 1.0)
 
             # 重新创建画布
-            if self.canvas:
-                self.canvas.destroy()
             self.canvas = tk.Canvas(self.root, width=self.width, height=self.height,
                                     highlightthickness=0, bg=char_config["miyu_color"])
             self.canvas.pack()
@@ -194,19 +192,20 @@ class FloatingImage:
             y: int = self.height - self.tk_image.height()
 
             self.canvas_image = self.canvas.create_image(x, y, anchor=tk.NW, image=self.tk_image)
+        
         except Exception as e:
-            print(f"加载图片失败: {e}")
+            print(f"图片加载失败: {e}")
             self.width, self.height = 200, 200
             self.canvas = tk.Canvas(self.root, width=self.width, height=self.height,
-                                    highlightthickness=0, bg=char_config["miyu_color"])
+                                    highlightthickness=0, bg="white")
             self.canvas.pack()
             self.canvas.create_text(100, 100, text="图片加载失败", fill="black")
 
     def on_click(self, event: tk.Event):
         """左键点击事件：开始拖动或播放动画"""
         # 播放弹跳动画
-        self.animation_step = 0
-        self.animation_start_time = time.time()
+        self.current_frame = 0
+        self.animation_start_time: float = time.time()
         # 播放音效
         threading.Thread(target=self.play_sound).start()
         if self.animating:
@@ -236,42 +235,47 @@ class FloatingImage:
             self.sound.play()
         except:
             pass
+    
+    def gen_frames(self) -> None:
+        """提前生成所有动画帧"""
+        self.animation.clear()
+        for frame in range(int(self.duration * fps)):
+            x_factor, y_factor = custom_easing_curve(frame / (self.duration * fps))
+            img: Image.Image = self.original_image.resize((
+                int(self.original_image.size[0] * x_factor),
+                int(self.original_image.size[1] * y_factor)
+            ), Image.Resampling.BILINEAR)
+            self.animation.append(threshold(img))
 
     def animate(self):
         """弹跳动画（纵轴缩放）"""
         if not self.animating:
             return
 
-        # 计算缩放因子（正弦曲线模拟弹跳）
-        progress: float = self.animation_step / self.max_steps
-        self.x_scale_factor, self.y_scale_factor = custom_easing_curve(progress)
-
-        # 调整图片大小
-        new_width: int = int(self.original_image.size[0] * self.x_scale_factor)
-        new_height: int = int(self.original_image.size[1] * self.y_scale_factor)
-        resized_image: Image.Image = self.original_image.resize((new_width, new_height), Image.Resampling.BILINEAR)
-        resized_image = threshold(resized_image)
-        self.tk_image = ImageTk.PhotoImage(resized_image)
-        self.canvas.itemconfig(self.canvas_image, image=self.tk_image)
-
-        # 底部对齐
-        new_x: int = (self.width - new_width) // 2
-        new_y: int = self.height - new_height
-        self.canvas.coords(self.canvas_image, new_x, new_y)
-
-        # 继续动画
-        self.animation_step = time.time() - self.animation_start_time
-        if self.animation_step > self.max_steps:
+        # 计算当前应当播放第几帧，并判断是否播放完毕
+        self.current_frame = int((time.time() - self.animation_start_time) * fps)
+        if self.current_frame >= self.duration * fps:
             self.animating = False
             self.tk_image = ImageTk.PhotoImage(self.original_image)
             self.canvas.itemconfig(self.canvas_image, image=self.tk_image)
             self.canvas.coords(self.canvas_image, (self.width - self.original_image.size[0]) // 2, self.height - self.original_image.size[1])
-        else:
-            self.root.after(1000 // 60, self.animate)
+            return
+        
+        # 设置当前所显示的帧
+        self.tk_image = ImageTk.PhotoImage(self.animation[self.current_frame])
+        self.canvas.itemconfig(self.canvas_image, image=self.tk_image)
+
+        # 底部对齐
+        new_x: int = (self.width - self.tk_image.width()) // 2
+        new_y: int = self.height - self.tk_image.height()
+        self.canvas.coords(self.canvas_image, new_x, new_y)
+
+        # 准备播放下一帧动画
+        self.root.after(1000 // fps, self.animate)
 
     def create_right_menu(self):
         """创建右键菜单"""
-        self.right_menu = Menu(self.root, tearoff=0)
+        self.right_menu: tk.Menu = Menu(self.root, tearoff=0)
         self.right_menu.add_command(label="更换中旋", command=self.change_sound)
         self.right_menu.add_command(label="更换晴", command=self.change_image)
         self.right_menu.add_command(label="导入", command=self.load_char)
@@ -366,7 +370,9 @@ class FloatingImage:
     def quit_app(self):
         """退出程序"""
         self.animating = False
+        self.animation.clear()
         self.tray.stop()
+        self.canvas.destroy()
         self.root.quit()
         self.root.destroy()
         sys.exit(0)
@@ -374,7 +380,9 @@ class FloatingImage:
     def restart_app(self):
         """重启程序"""
         self.animating = False
+        self.animation.clear()
         self.tray.stop()
+        self.canvas.destroy()
         self.root.quit()
         self.root.destroy()
         main()

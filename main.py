@@ -68,6 +68,7 @@ class CharConfig(TypedDict):
     # image_hover: NotRequired[str] # 悬停时
     image_active: NotRequired[str] # 戳动画
     # image_visited: NotRequired[str] # 戳完后
+    icon: NotRequired[str] # 托盘图标文件相对路径
     miyu_color: str # 将被视为透明的颜色
 
 char_config: CharConfig
@@ -377,12 +378,13 @@ class FloatingImage:
 
     def create_tray(self):
         """创建系统托盘"""
-        # 创建托盘图标（使用默认图片）
+        # 创建托盘图标
         tray_icon: Image.Image
         try:
-            tray_icon = Image.open(resource_path("tray_icon.png")) if os.path.exists(resource_path("tray_icon.png")) else self.image
+            tray_icon_path = char_config.get("icon", char_config["image"])
+            tray_icon = Image.open(char_res_path(tray_icon_path))
         except:
-            tray_icon = Image.new('RGB', (64, 64), color='gray')
+            tray_icon = self.image.copy()
 
         # 托盘菜单
         tray_menu: tuple[MenuItem, ...] = (

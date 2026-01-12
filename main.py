@@ -67,12 +67,16 @@ class CharConfig(TypedDict):
     # image_visited: NotRequired[str] # 戳完后
     icon: NotRequired[str] # 托盘图标文件相对路径
     miyu_color: str # 将被视为透明的颜色
+    duration: float # 回弹动画时长（秒）
+    duration_active: float # 按下动画时长（秒）
 
 char_config: CharConfig
 default_char_config: CharConfig = CharConfig({
     "sound": "sndReverbClack.wav",
     "image": "Miss Qing.png",
     "miyu_color": "#AD0FA1",
+    "duration": 1.0,
+    "duration_active": 0.25,
 })
 
 
@@ -197,8 +201,6 @@ class FloatingImage:
         self.animating: str = "" # 正在播放的动画
         self.animation_start_time: float = time.time() # 动画起始时间
         self.current_frame: int = 0 # 动画当前位于第几帧
-        self.press_duration: float = 1/4 # 按下动画时长（秒）
-        self.release_duration: float = 1.0 # 释放动画时长（秒）
         self.gen_frames()
         
         # 略微扩展画布大小，以避免图像在动画过程中溢出画布范围
@@ -261,7 +263,7 @@ class FloatingImage:
 
     def on_mouse_press(self, event: tk.Event):
         """左键点击事件"""
-        if self.animating == "release":
+        if self.animating.startswith("release"):
             # 记录拖动起始位置
             self.dragging = True
             self.start_x = event.x
@@ -293,8 +295,8 @@ class FloatingImage:
     def gen_frames(self) -> None:
         """提前生成所有动画帧"""
         self.press_animation: list[Image.Image] = []
-        for frame in range(int(self.press_duration * config["fps"])):
-            x_factor, y_factor = press_easing_curve(frame / (self.press_duration * config["fps"]))
+        for frame in range(int(char_config["duration_active"] * config["fps"])):
+            x_factor, y_factor = press_easing_curve(frame / (char_config["duration_active"] * config["fps"]))
             img: Image.Image = self.image_active.resize((
                 int(self.image_active.size[0] * x_factor),
                 int(self.image_active.size[1] * y_factor)
@@ -302,8 +304,8 @@ class FloatingImage:
             self.press_animation.append(threshold(img))
             
         self.release_animation: list[Image.Image] = []
-        for frame in range(int(self.release_duration * config["fps"])):
-            x_factor, y_factor = release_easing_curve(frame / (self.release_duration * config["fps"]))
+        for frame in range(int(char_config["duration"] * config["fps"])):
+            x_factor, y_factor = release_easing_curve(frame / (char_config["duration"] * config["fps"]))
             img: Image.Image = self.image_active.resize((
                 int(self.image_active.size[0] * x_factor),
                 int(self.image_active.size[1] * y_factor)
@@ -318,7 +320,7 @@ class FloatingImage:
 
         # 计算当前应当播放第几帧，并判断是否播放完毕
         self.current_frame = int((time.time() - self.animation_start_time) * config["fps"])
-        if self.current_frame >= self.press_duration * config["fps"]:
+        if self.current_frame >= char_config["duration_active"] * config["fps"]:
             self.animating = ""
             self.set_image(self.press_animation[-1])
             if not self.pressing:
@@ -339,7 +341,7 @@ class FloatingImage:
 
         # 计算当前应当播放第几帧，并判断是否播放完毕
         self.current_frame = int((time.time() - self.animation_start_time) * config["fps"])
-        if self.current_frame >= self.release_duration * config["fps"]:
+        if self.current_frame >= char_config["duration"] * config["fps"]:
             self.animating = ""
             self.set_image(self.image)
             return

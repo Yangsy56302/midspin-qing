@@ -50,6 +50,7 @@ class Config(TypedDict):
     fps: int # 帧率
     topmost: bool # 置顶？
     echo: bool # 音效可叠加？若是，则高速戳晴时很可能会吞音
+    cooldown: float # 冷却时间（秒）
 
 config: Config
 default_config: Config = Config({
@@ -57,6 +58,7 @@ default_config: Config = Config({
     "fps": 60,
     "topmost": True,
     "echo": False,
+    "cooldown": 4/60,
 })
 
 
@@ -129,7 +131,8 @@ class FloatingImage:
         self.root: tk.Tk = root
         self.root.overrideredirect(True)  # 无边框
         self.root.attributes('-topmost', config["topmost"])  # 最上层显示
-        self.root.attributes('-transparentcolor', char_config["miyu_color"])  # 透明色（根据图片调整）
+        if os.name == 'nt':  # Windows系统
+            self.root.attributes('-transparentcolor', char_config["miyu_color"]) # 透明色（根据图片调整）
 
         # 初始化音效
         pygame.mixer.init()
@@ -155,7 +158,7 @@ class FloatingImage:
         self.root.geometry(f"{self.width}x{self.height}+100+100") # 调整窗口大小和位置
 
         # 欢迎
-        self.start_animation()
+        self.start_animation(ignore_cooldown=True)
         
     def load_image(self):
         """加载图片并保持原始像素"""
@@ -183,6 +186,7 @@ class FloatingImage:
             self.image_active = self.image.copy()
 
         # 动画相关
+        self.animation_start_time: float = time.time() # 动画起始时间
         self.animating: bool = False # 动画是否正在播放
         self.current_frame: int = 0 # 动画当前位于第几帧
         self.duration: float = 1.0 # 动画总时长（秒）
@@ -211,11 +215,15 @@ class FloatingImage:
 
         self.canvas_image: int = self.canvas.create_image(x, y, anchor=tk.NW, image=self.tk_image)
             
-    def start_animation(self):
+    def start_animation(self, *, ignore_cooldown: bool = False):
         """开始播放动画"""
+        # 处理冷却时间
+        if time.time() - self.animation_start_time < config["cooldown"] and not ignore_cooldown: return
+        
         self.animation_start_time: float = time.time()
         threading.Thread(target=self.play_sound).start()
         self.current_frame = 0
+        
         if not self.animating:
             self.animating = True
             self.animate()
@@ -241,7 +249,7 @@ class FloatingImage:
             y: int = self.root.winfo_y() + (event.y - self.start_y)
             self.root.geometry(f"+{x}+{y}")
 
-    def on_release(self, event: tk.Event):
+    def on_release(self, event: tk.Event): 
         """左键释放事件"""
         self.dragging = False
 
@@ -294,7 +302,7 @@ class FloatingImage:
     def summon(self):
         """将晴召唤至窗口顶层"""
         self.root.focus_force()
-        self.start_animation()
+        self.start_animation(ignore_cooldown=True)
 
     def change_image(self):
         """更换图片"""
@@ -439,8 +447,6 @@ def main():
 
     # 设置透明背景（支持透明像素）
     root.attributes('-alpha', 1.0)
-    if os.name == 'nt':  # Windows系统
-        root.attributes('-transparentcolor', char_config["miyu_color"])
 
     # 创建悬浮图片实例
     app: FloatingImage = FloatingImage(root)

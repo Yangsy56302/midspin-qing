@@ -16,18 +16,6 @@ import yaml
 from dataclasses import dataclass
 
 
-def press_easing_curve(t: float) -> tuple[float, float]:
-    ease_func = easing.ElasticEaseOut(start=0, end=-0.5, duration=1) # type: ignore
-    ease_val: float = ease_func.ease(t)
-    return 1 - ease_val, 1 + ease_val
- 
-
-def release_easing_curve(t: float) -> tuple[float, float]:
-    ease_func = easing.ElasticEaseOut(start=-0.5, end=0, duration=1) # type: ignore
-    ease_val: float = ease_func.ease(t)
-    return 1 - ease_val, 1 + ease_val
-
-
 # 确保打包后能找到资源
 def resource_path(relative_path: str) -> str:
     """获取资源的绝对路径（用于pyinstaller打包）"""
@@ -53,7 +41,7 @@ default_config: Config = Config({
     "fps": 60,
     "topmost": True,
     "echo": False,
-    "cooldown": 4/60,
+    "cooldown": 1/60,
 })
 
 
@@ -67,17 +55,32 @@ class CharConfig(TypedDict):
     # image_visited: NotRequired[str] # 戳完后
     icon: NotRequired[str] # 托盘图标文件相对路径
     miyu_color: str # 将被视为透明的颜色
+    smooth: NotRequired[bool] # 平滑图像缩放？
+    factor: float # 弹性系数
     duration: float # 回弹动画时长（秒）
     duration_active: float # 按下动画时长（秒）
 
 char_config: CharConfig
 default_char_config: CharConfig = CharConfig({
-    "sound": "sndReverbClack.wav",
+    "sound": "sndReverbClack.wav", 
     "image": "Miss Qing.png",
     "miyu_color": "#AD0FA1",
+    "factor": -0.5,
     "duration": 1.0,
     "duration_active": 0.25,
 })
+
+
+def press_easing_curve(t: float) -> tuple[float, float]:
+    ease_func = easing.ElasticEaseOut(start=0, end=char_config["factor"], duration=1) # type: ignore
+    ease_val: float = ease_func.ease(t)
+    return 1 - ease_val, 1 + ease_val
+ 
+
+def release_easing_curve(t: float) -> tuple[float, float]:
+    ease_func = easing.ElasticEaseOut(start=char_config["factor"], end=0, duration=1) # type: ignore
+    ease_val: float = ease_func.ease(t)
+    return 1 - ease_val, 1 + ease_val
 
 
 def load_config():
@@ -91,6 +94,10 @@ def load_char_config():
     with open(char_res_path(path_char_config), "r") as f:
         char_config = default_char_config.copy()
         char_config.update(yaml.load(f, Loader=yaml.FullLoader))
+    if char_config["factor"] < -0.625:
+        char_config["factor"] = -0.625
+    if char_config["factor"] > 0.625:
+        char_config["factor"] = 0.625
 
 def dump_config(cfg: Config | None = None, /):
     if cfg is None: cfg = config
@@ -204,8 +211,8 @@ class FloatingImage:
         self.gen_frames()
         
         # 略微扩展画布大小，以避免图像在动画过程中溢出画布范围
-        self.width: int = int(self.image.size[0] * 2)
-        self.height: int = int(self.image.size[1] * 2)
+        self.width: int = int(self.image.size[0] / (1 - abs(char_config["factor"])))
+        self.height: int = int(self.image.size[1] / (1 - abs(char_config["factor"])))
         
         # 禁用高DPI缩放，保持原始像素
         self.root.tk.call('tk', 'scaling', 1.0)
@@ -300,7 +307,7 @@ class FloatingImage:
             img: Image.Image = self.image_active.resize((
                 int(self.image_active.size[0] * x_factor),
                 int(self.image_active.size[1] * y_factor)
-            ), Image.Resampling.BILINEAR)
+            ), Image.Resampling.BILINEAR if char_config.get("smooth", True) else Image.Resampling.NEAREST)
             self.press_animation.append(threshold(img))
             
         self.release_animation: list[Image.Image] = []
@@ -309,11 +316,10 @@ class FloatingImage:
             img: Image.Image = self.image_active.resize((
                 int(self.image_active.size[0] * x_factor),
                 int(self.image_active.size[1] * y_factor)
-            ), Image.Resampling.BILINEAR)
+            ), Image.Resampling.BILINEAR if char_config.get("smooth", True) else Image.Resampling.NEAREST)
             self.release_animation.append(threshold(img))
     
     def animate_press(self, animation_id: str) -> None:
-        print(self)
         """按下动画（纵轴缩放）"""
         if self.animating != animation_id:
             return
@@ -335,7 +341,6 @@ class FloatingImage:
 
     def animate_release(self, animation_id: str) -> None:
         """释放动画（纵轴缩放）"""
-        print(self)
         if self.animating != animation_id:
             return
 

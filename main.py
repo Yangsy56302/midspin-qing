@@ -10,27 +10,22 @@ import pystray
 from pystray import MenuItem
 import sys
 import os
+import random
 import easing_functions as easing
 import yaml
 from dataclasses import dataclass
 
 
-def custom_easing_curve(t: float) -> tuple[float, float]:
-    """
-    自定义缓动曲线
-    :param t: 归一化时间（0 ≤ t ≤ 1）
-    :return: 对应数值
-    """
-    if 0 <= t < 0.125:
-        ease_func = easing.CubicEaseOut(start=0, end=-0.5, duration=0.125) # type: ignore
-        ease_val: float = ease_func.ease(t)
-        return 1 - ease_val, 1 + ease_val
-    elif 0.125 <= t < 1:
-        ease_func = easing.ElasticEaseOut(start=-0.5, end=0, duration=1.25) # type: ignore
-        ease_val: float = ease_func.ease(t - 0.125)
-        return 1 - ease_val, 1 + ease_val
-    else: # 边界处理
-        return 1.0, 1.0
+def press_easing_curve(t: float) -> tuple[float, float]:
+    ease_func = easing.ElasticEaseOut(start=0, end=-0.5, duration=1) # type: ignore
+    ease_val: float = ease_func.ease(t)
+    return 1 - ease_val, 1 + ease_val
+ 
+
+def release_easing_curve(t: float) -> tuple[float, float]:
+    ease_func = easing.ElasticEaseOut(start=-0.5, end=0, duration=1) # type: ignore
+    ease_val: float = ease_func.ease(t)
+    return 1 - ease_val, 1 + ease_val
 
 
 # 确保打包后能找到资源
@@ -147,18 +142,30 @@ class FloatingImage:
         self.start_y: int = 0
 
         # 绑定事件
-        self.canvas.bind("<Button-1>", self.on_click)
+        self.canvas.bind("<Button-1>", self.on_mouse_press)
         self.canvas.bind("<B1-Motion>", self.on_drag)
-        self.canvas.bind("<ButtonRelease-1>", self.on_release)
+        self.canvas.bind("<ButtonRelease-1>", self.on_mouse_release)
         self.canvas.bind("<Button-3>", self.show_right_menu)
         self.root.bind("<Key>", self.on_key_press)
+        self.root.bind("<KeyRelease>", self.on_key_release)
         
         self.create_right_menu() # 创建右键菜单
         self.create_tray() # 创建系统托盘
         self.root.geometry(f"{self.width}x{self.height}+100+100") # 调整窗口大小和位置
 
         # 欢迎
-        self.start_animation(ignore_cooldown=True)
+        threading.Thread(target=self.play_sound).start()
+        self.continue_animation(auto=True)
+
+    def set_image(self, image: Image.Image) -> None:
+        """设置要显示的图片"""
+        self.tk_image = ImageTk.PhotoImage(image)
+        self.canvas.itemconfig(self.canvas_image, image=self.tk_image)
+        
+        # 底部对齐
+        new_x: int = (self.width - self.tk_image.width()) // 2
+        new_y: int = self.height - self.tk_image.height()
+        self.canvas.coords(self.canvas_image, new_x, new_y)
         
     def load_image(self):
         """加载图片并保持原始像素"""
@@ -186,15 +193,17 @@ class FloatingImage:
             self.image_active = self.image.copy()
 
         # 动画相关
+        self.pressing: bool = False # 按键是否按下
+        self.animating: str = "" # 正在播放的动画
         self.animation_start_time: float = time.time() # 动画起始时间
-        self.animating: bool = False # 动画是否正在播放
         self.current_frame: int = 0 # 动画当前位于第几帧
-        self.duration: float = 1.0 # 动画总时长（秒）
+        self.press_duration: float = 1/4 # 按下动画时长（秒）
+        self.release_duration: float = 1.0 # 释放动画时长（秒）
         self.gen_frames()
         
         # 略微扩展画布大小，以避免图像在动画过程中溢出画布范围
-        self.width: int = int(self.image.size[0] * 1.5)
-        self.height: int = int(self.image.size[1] * 1.5)
+        self.width: int = int(self.image.size[0] * 2)
+        self.height: int = int(self.image.size[1] * 2)
         
         # 禁用高DPI缩放，保持原始像素
         self.root.tk.call('tk', 'scaling', 1.0)
@@ -215,30 +224,48 @@ class FloatingImage:
 
         self.canvas_image: int = self.canvas.create_image(x, y, anchor=tk.NW, image=self.tk_image)
             
-    def start_animation(self, *, ignore_cooldown: bool = False):
-        """开始播放动画"""
-        # 处理冷却时间
-        if time.time() - self.animation_start_time < config["cooldown"] and not ignore_cooldown: return
+    def start_animation(self, *, auto: bool = False):
+        """播放按下动画"""
+        if not auto:
+            if self.pressing: return
+            if time.time() - self.animation_start_time < config["cooldown"]: return
+            self.pressing = True
         
         self.animation_start_time: float = time.time()
-        threading.Thread(target=self.play_sound).start()
         self.current_frame = 0
+        self.animating = "press " + str(random.random())
         
-        if not self.animating:
-            self.animating = True
-            self.animate()
+        threading.Thread(target=self.play_sound).start()
+        
+        self.animate_press(self.animating)
+            
+    def continue_animation(self, *, auto: bool = False):
+        """播放释放动画"""
+        if not auto:
+            if not self.pressing: return
+            self.pressing = False
+        
+        self.animation_start_time: float = time.time()
+        self.current_frame = 0
+        self.animating = "release " + str(random.random())
+        
+        self.animate_release(self.animating)
 
-    def on_click(self, event: tk.Event):
-        """左键点击事件"""
+    def on_key_press(self, event: tk.Event):
+        """键盘按键事件"""
         self.start_animation()
-        if self.animating:
+
+    def on_key_release(self, event: tk.Event):
+        """键盘按键事件"""
+        self.continue_animation()
+
+    def on_mouse_press(self, event: tk.Event):
+        """左键点击事件"""
+        if self.animating == "release":
             # 记录拖动起始位置
             self.dragging = True
             self.start_x = event.x
             self.start_y = event.y
-
-    def on_key_press(self, event: tk.Event):
-        """键盘按键事件"""
         self.start_animation()
 
     def on_drag(self, event: tk.Event):
@@ -249,9 +276,10 @@ class FloatingImage:
             y: int = self.root.winfo_y() + (event.y - self.start_y)
             self.root.geometry(f"+{x}+{y}")
 
-    def on_release(self, event: tk.Event): 
+    def on_mouse_release(self, event: tk.Event): 
         """左键释放事件"""
         self.dragging = False
+        self.continue_animation()
 
     def play_sound(self) -> None:
         """播放音效"""
@@ -264,45 +292,69 @@ class FloatingImage:
     
     def gen_frames(self) -> None:
         """提前生成所有动画帧"""
-        self.animation: list[Image.Image] = [] # 动画帧列表
-        for frame in range(int(self.duration * config["fps"])):
-            x_factor, y_factor = custom_easing_curve(frame / (self.duration * config["fps"]))
+        self.press_animation: list[Image.Image] = []
+        for frame in range(int(self.press_duration * config["fps"])):
+            x_factor, y_factor = press_easing_curve(frame / (self.press_duration * config["fps"]))
             img: Image.Image = self.image_active.resize((
                 int(self.image_active.size[0] * x_factor),
                 int(self.image_active.size[1] * y_factor)
             ), Image.Resampling.BILINEAR)
-            self.animation.append(threshold(img))
-
-    def animate(self) -> None:
-        """弹跳动画（纵轴缩放）"""
-        if not self.animating:
+            self.press_animation.append(threshold(img))
+            
+        self.release_animation: list[Image.Image] = []
+        for frame in range(int(self.release_duration * config["fps"])):
+            x_factor, y_factor = release_easing_curve(frame / (self.release_duration * config["fps"]))
+            img: Image.Image = self.image_active.resize((
+                int(self.image_active.size[0] * x_factor),
+                int(self.image_active.size[1] * y_factor)
+            ), Image.Resampling.BILINEAR)
+            self.release_animation.append(threshold(img))
+    
+    def animate_press(self, animation_id: str) -> None:
+        print(self)
+        """按下动画（纵轴缩放）"""
+        if self.animating != animation_id:
             return
 
         # 计算当前应当播放第几帧，并判断是否播放完毕
         self.current_frame = int((time.time() - self.animation_start_time) * config["fps"])
-        if self.current_frame >= self.duration * config["fps"]:
-            self.animating = False
-            self.tk_image = ImageTk.PhotoImage(self.image)
-            self.canvas.itemconfig(self.canvas_image, image=self.tk_image)
-            self.canvas.coords(self.canvas_image, (self.width - self.image.size[0]) // 2, self.height - self.image.size[1])
+        if self.current_frame >= self.press_duration * config["fps"]:
+            self.animating = ""
+            self.set_image(self.press_animation[-1])
+            if not self.pressing:
+                self.continue_animation(auto=True)
             return
         
         # 设置当前所显示的帧
-        self.tk_image = ImageTk.PhotoImage(self.animation[self.current_frame])
-        self.canvas.itemconfig(self.canvas_image, image=self.tk_image)
-
-        # 底部对齐
-        new_x: int = (self.width - self.tk_image.width()) // 2
-        new_y: int = self.height - self.tk_image.height()
-        self.canvas.coords(self.canvas_image, new_x, new_y)
+        self.set_image(self.press_animation[self.current_frame])
 
         # 准备播放下一帧动画
-        self.root.after(500 // config["fps"], self.animate)
+        self.root.after(500 // config["fps"], lambda: self.animate_press(animation_id))
+
+    def animate_release(self, animation_id: str) -> None:
+        """释放动画（纵轴缩放）"""
+        print(self)
+        if self.animating != animation_id:
+            return
+
+        # 计算当前应当播放第几帧，并判断是否播放完毕
+        self.current_frame = int((time.time() - self.animation_start_time) * config["fps"])
+        if self.current_frame >= self.release_duration * config["fps"]:
+            self.animating = ""
+            self.set_image(self.image)
+            return
+        
+        # 设置当前所显示的帧
+        self.set_image(self.release_animation[self.current_frame])
+
+        # 准备播放下一帧动画
+        self.root.after(500 // config["fps"], lambda: self.animate_release(animation_id))
     
     def summon(self):
         """将晴召唤至窗口顶层"""
         self.root.focus_force()
-        self.start_animation(ignore_cooldown=True)
+        threading.Thread(target=self.play_sound).start()
+        self.continue_animation(auto=True)
 
     def change_image(self):
         """更换图片"""
@@ -414,8 +466,8 @@ class FloatingImage:
 
     def quit_app(self):
         """退出程序"""
-        self.animating = False
-        self.animation.clear()
+        self.animating = ""
+        self.press_animation.clear()
         self.tray.stop()
         self.canvas.destroy()
         self.root.quit()
@@ -424,13 +476,16 @@ class FloatingImage:
 
     def restart_app(self):
         """重启程序"""
-        self.animating = False
-        self.animation.clear()
+        self.animating = ""
+        self.press_animation.clear()
         self.tray.stop()
         self.canvas.destroy()
         self.root.quit()
         self.root.destroy()
         main()
+    
+    def __str__(self) -> str:
+        return f"{self.animating = } , {self.pressing = }"
 
 
 def main():

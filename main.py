@@ -34,6 +34,7 @@ class Config(TypedDict):
     topmost: bool # 置顶？
     echo: bool # 音效可叠加？若是，则高速戳晴时很可能会吞音
     cooldown: float # 冷却时间（秒）
+    x: NotRequired[int]; y: NotRequired[int] # 窗口坐标（锚点位于底部）
 
 config: Config
 default_config: Config = Config({
@@ -47,6 +48,7 @@ default_config: Config = Config({
 
 path_char_config: str = "config.yml"
 class CharConfig(TypedDict):
+    name: str # 角色名
     sound: str # 中旋音效文件相对路径
     image: str # 晴立绘文件相对路径
     # image_link: NotRequired[str] # 未戳过
@@ -62,12 +64,13 @@ class CharConfig(TypedDict):
 
 char_config: CharConfig
 default_char_config: CharConfig = CharConfig({
+    "name": "晴小姐", 
     "sound": "sndReverbClack.wav", 
-    "image": "Miss Qing.png",
-    "miyu_color": "#AD0FA1",
-    "factor": -0.5,
-    "duration": 1.0,
-    "duration_active": 0.25,
+    "image": "Miss Qing.png", 
+    "miyu_color": "#AD0FA1", 
+    "factor": -0.5, 
+    "duration": 1.0, 
+    "duration_active": 0.25, 
 })
 
 
@@ -83,13 +86,13 @@ def release_easing_curve(t: float) -> tuple[float, float]:
     return 1 - ease_val, 1 + ease_val
 
 
-def load_config():
+def load_config() -> None:
     global config
     with open(resource_path(path_config), "r") as f:
         config = default_config.copy()
         config.update(yaml.load(f, Loader=yaml.FullLoader))
 
-def load_char_config():
+def load_char_config() -> None:
     global char_config
     with open(char_res_path(path_char_config), "r") as f:
         char_config = default_char_config.copy()
@@ -99,12 +102,12 @@ def load_char_config():
     if char_config["factor"] > 0.625:
         char_config["factor"] = 0.625
 
-def dump_config(cfg: Config | None = None, /):
+def dump_config(cfg: Config | None = None, /) -> None:
     if cfg is None: cfg = config
     with open(resource_path(path_config), "w") as f:
         yaml.dump(cfg, f)
 
-def dump_char_config(cfg: CharConfig | None = None, /):
+def dump_char_config(cfg: CharConfig | None = None, /) -> None:
     if cfg is None: cfg = char_config
     with open(char_res_path(path_char_config), "w") as f:
         yaml.dump(cfg, f)
@@ -133,10 +136,19 @@ def threshold(img: Image.Image, thr: float = 0xFF, /) -> Image.Image:
 
 
 class FloatingImage:
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk) -> None:
         self.root: tk.Tk = root
-        self.root.overrideredirect(True)  # 无边框
-        self.root.attributes('-topmost', config["topmost"])  # 最上层显示
+        self.root.title(char_config.get("name", os.path.basename(config["char"])))
+        icon_path = char_config.get("icon")
+        try:
+            if icon_path is not None:
+                self.root.iconbitmap(char_res_path(icon_path))
+            else:
+                self.root.iconphoto(True, tk.PhotoImage(char_config["image"]))
+        except tk.TclError: pass
+        self.root.overrideredirect(True) # 无边框
+        self.root.resizable(False, False) # 禁止缩放
+        self.root.attributes('-topmost', config["topmost"]) # 最上层显示
         if os.name == 'nt':  # Windows系统
             self.root.attributes('-transparentcolor', char_config["miyu_color"]) # 透明色（根据图片调整）
 
@@ -162,14 +174,37 @@ class FloatingImage:
         
         self.create_right_menu() # 创建右键菜单
         self.create_tray() # 创建系统托盘
-        self.root.geometry(f"{self.width}x{self.height}+100+100") # 调整窗口大小和位置
+        self.root.geometry(f"{self.width}x{self.height}+0+0") # 调整窗口大小
+        x: int = config.get("x", root.winfo_screenwidth() // 2)
+        y: int = config.get("y", root.winfo_screenheight() // 2)
+        self.set_pos(x, y) # 调整窗口位置
 
         # 欢迎
         threading.Thread(target=self.play_sound).start()
         self.continue_animation(auto=True)
+    
+    def get_pos(self) -> tuple[int, int]:
+        """获取窗口位置"""
+        return (
+            self.root.winfo_x() + (self.width // 2),
+            self.root.winfo_y() + self.height
+        )
+    
+    def set_pos(self, x: int, y: int) -> None:
+        """设置窗口位置"""
+        self.root.geometry(f"{self.width}x{self.height}+{x - (self.width // 2)}+{y - self.height}")
+        
+    def back_to_screen(self) -> None:
+        """使窗口回到屏幕范围内"""
+        x, y = self.get_pos()
+        x = max(x, self.width // 2)
+        y = max(y, self.height)
+        x = min(x, self.root.winfo_screenwidth() - self.width // 2)
+        y = min(y, self.root.winfo_screenheight())
+        self.set_pos(x, y)
 
-    def set_image(self, image: Image.Image) -> None:
-        """设置要显示的图片"""
+    def display_image(self, image: Image.Image) -> None:
+        """显示图片"""
         self.tk_image = ImageTk.PhotoImage(image)
         self.canvas.itemconfig(self.canvas_image, image=self.tk_image)
         
@@ -178,7 +213,7 @@ class FloatingImage:
         new_y: int = self.height - self.tk_image.height()
         self.canvas.coords(self.canvas_image, new_x, new_y)
         
-    def load_image(self):
+    def load_image(self) -> None:
         """加载图片并保持原始像素"""
         missing_image: Image.Image = Image.new("RGBA", (0x100, 0x100), "#F800F8")
         draw = ImageDraw.Draw(missing_image)
@@ -233,7 +268,7 @@ class FloatingImage:
 
         self.canvas_image: int = self.canvas.create_image(x, y, anchor=tk.NW, image=self.tk_image)
             
-    def start_animation(self, *, auto: bool = False):
+    def start_animation(self, *, auto: bool = False) -> None:
         """播放按下动画"""
         if not auto:
             if self.pressing: return
@@ -248,7 +283,7 @@ class FloatingImage:
         
         self.animate_press(self.animating)
             
-    def continue_animation(self, *, auto: bool = False):
+    def continue_animation(self, *, auto: bool = False) -> None:
         """播放释放动画"""
         if not auto:
             if not self.pressing: return
@@ -260,15 +295,15 @@ class FloatingImage:
         
         self.animate_release(self.animating)
 
-    def on_key_press(self, event: tk.Event):
+    def on_key_press(self, event: tk.Event) -> None:
         """键盘按键事件"""
         self.start_animation()
 
-    def on_key_release(self, event: tk.Event):
+    def on_key_release(self, event: tk.Event) -> None:
         """键盘按键事件"""
         self.continue_animation()
 
-    def on_mouse_press(self, event: tk.Event):
+    def on_mouse_press(self, event: tk.Event) -> None:
         """左键点击事件"""
         if self.animating.startswith("release"):
             # 记录拖动起始位置
@@ -277,7 +312,7 @@ class FloatingImage:
             self.start_y = event.y
         self.start_animation()
 
-    def on_drag(self, event: tk.Event):
+    def on_drag(self, event: tk.Event) -> None:
         """左键拖动事件"""
         if self.dragging:
             # 计算新位置
@@ -285,10 +320,14 @@ class FloatingImage:
             y: int = self.root.winfo_y() + (event.y - self.start_y)
             self.root.geometry(f"+{x}+{y}")
 
-    def on_mouse_release(self, event: tk.Event): 
+    def on_mouse_release(self, event: tk.Event) -> None: 
         """左键释放事件"""
         self.dragging = False
         self.continue_animation()
+        x, y = self.get_pos()
+        config["x"] = x
+        config["y"] = y
+        dump_config()
 
     def play_sound(self) -> None:
         """播放音效"""
@@ -328,13 +367,13 @@ class FloatingImage:
         self.current_frame = int((time.time() - self.animation_start_time) * config["fps"])
         if self.current_frame >= char_config["duration_active"] * config["fps"]:
             self.animating = ""
-            self.set_image(self.press_animation[-1])
+            self.display_image(self.press_animation[-1])
             if not self.pressing:
                 self.continue_animation(auto=True)
             return
         
         # 设置当前所显示的帧
-        self.set_image(self.press_animation[self.current_frame])
+        self.display_image(self.press_animation[self.current_frame])
 
         # 准备播放下一帧动画
         self.root.after(500 // config["fps"], lambda: self.animate_press(animation_id))
@@ -348,22 +387,22 @@ class FloatingImage:
         self.current_frame = int((time.time() - self.animation_start_time) * config["fps"])
         if self.current_frame >= char_config["duration"] * config["fps"]:
             self.animating = ""
-            self.set_image(self.image)
+            self.display_image(self.image)
             return
         
         # 设置当前所显示的帧
-        self.set_image(self.release_animation[self.current_frame])
+        self.display_image(self.release_animation[self.current_frame])
 
         # 准备播放下一帧动画
         self.root.after(500 // config["fps"], lambda: self.animate_release(animation_id))
     
-    def summon(self):
+    def summon(self) -> None:
         """将晴召唤至窗口顶层"""
         self.root.focus_force()
         threading.Thread(target=self.play_sound).start()
         self.continue_animation(auto=True)
 
-    def change_image(self):
+    def change_image(self) -> None:
         """更换图片"""
         file_path: str = filedialog.askopenfilename(
             title="选择晴…",
@@ -379,7 +418,7 @@ class FloatingImage:
             dump_char_config()
             self.restart_app()
 
-    def change_sound(self):
+    def change_sound(self) -> None:
         """更换音效"""
         file_path: str = filedialog.askopenfilename(
             title="选择中旋…",
@@ -395,7 +434,7 @@ class FloatingImage:
             dump_char_config()
             self.restart_app()
 
-    def load_char(self):
+    def load_char(self) -> None:
         """从文件夹导入当前角色配置"""
         file_path: str = filedialog.askdirectory(
             title="导入角色…",
@@ -406,7 +445,7 @@ class FloatingImage:
             dump_config()
             self.restart_app()
 
-    def dump_char(self):
+    def dump_char(self) -> None:
         """导出当前角色配置至文件夹"""
         file_path: str = filedialog.askdirectory(
             title="导出角色…",
@@ -416,7 +455,7 @@ class FloatingImage:
             shutil.copytree(resource_path(config["char"]), resource_path(file_path), dirs_exist_ok=True)
             # self.restart_app()
 
-    def switch_topmost(self):
+    def switch_topmost(self) -> None:
         """切换窗口置顶状态"""
         config["topmost"] = not config["topmost"]
         dump_config()
@@ -434,16 +473,16 @@ class FloatingImage:
         self.right_menu.add_command(label="切换置顶", command=self.switch_topmost)
         self.right_menu.add_separator()
         self.right_menu.add_command(label="重新加载", command=self.restart_app)
-        self.right_menu.add_command(label="退出", command=self.quit_app)
+        self.right_menu.add_command(label="退出", command=self.shut_app)
 
-    def show_right_menu(self, event: tk.Event):
+    def show_right_menu(self, event: tk.Event) -> None:
         """显示右键菜单"""
         try:
             self.right_menu.post(event.x_root, event.y_root)
         except:
             pass
 
-    def create_tray(self):
+    def create_tray(self) -> None:
         """创建系统托盘"""
         # 创建托盘图标
         tray_icon: Image.Image
@@ -461,41 +500,41 @@ class FloatingImage:
             MenuItem('读取角色配置…', self.load_char),
             MenuItem('克隆角色配置…', self.dump_char),
             MenuItem('切换置顶', self.switch_topmost),
+            MenuItem('找回走失的晴', self.back_to_screen),
             MenuItem('重新加载', self.restart_app),
-            MenuItem('退出', self.quit_app)
+            MenuItem('退出', self.shut_app)
         )
 
         # 创建托盘
-        self.tray = pystray.Icon("floating_image", tray_icon, "中旋晴", tray_menu)
+        self.tray = pystray.Icon("floating_image", tray_icon, char_config.get("name", os.path.basename(config["char"])), tray_menu)
 
         # 后台运行托盘
         threading.Thread(target=self.tray.run, daemon=True).start()
 
-    def quit_app(self):
-        """退出程序"""
+    def quit(self) -> None:
         self.animating = ""
         self.press_animation.clear()
+        self.release_animation.clear()
         self.tray.stop()
         self.canvas.destroy()
         self.root.quit()
         self.root.destroy()
+        dump_config()
+        time.sleep(1)
+        # dump_char_config()
+    
+    def shut_app(self) -> None:
+        """退出程序"""
+        self.quit()
         sys.exit(0)
 
-    def restart_app(self):
+    def restart_app(self) -> None:
         """重启程序"""
-        self.animating = ""
-        self.press_animation.clear()
-        self.tray.stop()
-        self.canvas.destroy()
-        self.root.quit()
-        self.root.destroy()
+        self.quit()
         main()
-    
-    def __str__(self) -> str:
-        return f"{self.animating = } , {self.pressing = }"
 
 
-def main():
+def main() -> None:
     # 加载配置
     if not os.path.exists(resource_path(path_config)): dump_config(default_config)
     load_config()
@@ -505,7 +544,6 @@ def main():
     
     # 创建主窗口
     root: tk.Tk = tk.Tk()
-    root.title("中旋晴")
 
     # 设置透明背景（支持透明像素）
     root.attributes('-alpha', 1.0)
